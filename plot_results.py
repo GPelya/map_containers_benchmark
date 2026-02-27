@@ -41,6 +41,7 @@ MAP_STYLE = {
     "PmrStdUnorderedMap":    dict(label="std::pmr::unordered_map",              color="#e67e22", ls="--", marker="s"),
     "PmrBoostUnorderedFlat": dict(label="pmr + boost::unordered_flat_map",      color="#3498db", ls="--", marker="P"),
     "PmrBoostUnorderedNode": dict(label="pmr + boost::unordered_node_map",      color="#1abc9c", ls="--", marker="X"),
+    "PmrAbslFlatHashMap":    dict(label="pmr + absl::flat_hash_map",            color="#2ecc71", ls="--", marker="^"),
 }
 
 # ── parse JSON ───────────────────────────────────────────────────────────────

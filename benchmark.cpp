@@ -123,6 +123,11 @@ using PmrBoostUnorderedNode = boost::unordered::unordered_node_map<
     uint32_t, Data,
     boost::hash<uint32_t>, std::equal_to<uint32_t>,
     std::pmr::polymorphic_allocator<std::pair<const uint32_t, Data>>>;
+// absl::flat_hash_map also exposes an Allocator parameter
+using PmrAbslFlatHashMap = absl::flat_hash_map<
+    uint32_t, Data,
+    absl::Hash<uint32_t>, std::equal_to<uint32_t>,
+    std::pmr::polymorphic_allocator<std::pair<const uint32_t, Data>>>;
 
 // ============================================================
 //  MapTraits: per-container reserve() + PMR construction
@@ -157,6 +162,13 @@ template <> struct MapTraits<PmrBoostUnorderedNode> {
     static void reserve(PmrBoostUnorderedNode& m, size_t n) { m.reserve(n); }
     static PmrBoostUnorderedNode construct(std::pmr::memory_resource* p) {
         return PmrBoostUnorderedNode{Alloc{p}};
+    }
+};
+template <> struct MapTraits<PmrAbslFlatHashMap> {
+    using Alloc = std::pmr::polymorphic_allocator<std::pair<const uint32_t, Data>>;
+    static void reserve(PmrAbslFlatHashMap& m, size_t n) { m.reserve(n); }
+    static PmrAbslFlatHashMap construct(std::pmr::memory_resource* p) {
+        return PmrAbslFlatHashMap{Alloc{p}};
     }
 };
 
@@ -224,11 +236,13 @@ static void BM_MapInsertionPMR(benchmark::State& state) {
 // INSERTION WITH MONOTONIC ALLOCATOR
 BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrStdMap)             ->RangeMultiplier(2)->Range(2, MAX_ELEMS);
 BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrStdUnorderedMap)    ->RangeMultiplier(2)->Range(2, MAX_ELEMS);
+BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrAbslFlatHashMap)    ->RangeMultiplier(2)->Range(2, MAX_ELEMS);
 BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrBoostUnorderedFlat) ->RangeMultiplier(2)->Range(2, MAX_ELEMS);
 BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrBoostUnorderedNode) ->RangeMultiplier(2)->Range(2, MAX_ELEMS);
 
 // INSERTION WITH MONOTONIC ALLOCATOR + RESERVE
 BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrStdUnorderedMap,    WithReserve)->RangeMultiplier(2)->Range(2, MAX_ELEMS);
+BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrAbslFlatHashMap,    WithReserve)->RangeMultiplier(2)->Range(2, MAX_ELEMS);
 BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrBoostUnorderedFlat, WithReserve)->RangeMultiplier(2)->Range(2, MAX_ELEMS);
 BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrBoostUnorderedNode, WithReserve)->RangeMultiplier(2)->Range(2, MAX_ELEMS);
 
