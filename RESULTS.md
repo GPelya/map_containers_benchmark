@@ -12,46 +12,74 @@
 | **Abseil** | 20220623 |
 | **Google Benchmark** | v1.8.0 |
 
-## Containers tested
+`Data = struct { float a; int b; }` (8 bytes). Keys: random `uint32_t`, seed `mt19937(42)`.
 
-| Alias | Full type |
-|---|---|
-| `std::map` | `std::map<uint32_t, Data>` — red-black tree |
-| `std::unordered_map` | `std::unordered_map<uint32_t, Data>` — chaining hash table |
-| `absl::flat_hash_map` | `absl::flat_hash_map<uint32_t, Data>` — open-addressing, SSE2 metadata |
-| `boost::flat_map` | `boost::container::flat_map<uint32_t, Data>` — sorted contiguous array |
-| `boost::unordered_flat_map` | `boost::unordered::unordered_flat_map<uint32_t, Data>` — open-addressing, SIMD group probing |
-| `boost::unordered_node_map` | `boost::unordered::unordered_node_map<uint32_t, Data>` — node-based open-addressing |
-
-`Data` = `{ float a; int b; }` (8 bytes).
-All hash maps pre-allocated with `reserve(n)` before insertion.
+> All axes are log-scale (see chart at bottom). All times in **ns per element**.
 
 ---
 
-## Insertion — ns per element
+## Insertion — without reserve
 
-> Lower is better. `boost::flat_map` capped at N=65 536 (O(N²) array shifts).
+> Container created fresh each iteration. No pre-allocation. `boost::flat_map` capped at N=65 536 (O(N²) shifts).
 
 | N | std::map | std::unordered_map | **absl::flat_hash_map** | boost::flat_map | **boost::unordered_flat_map** | boost::unordered_node_map |
 |---:|---:|---:|---:|---:|---:|---:|
-| 16 | 33.6 | 72.7 | 33.7 | 22.0 | **11.4** | 40.7 |
-| 256 | 41.2 | 77.4 | 38.2 | 78.1 | **20.3** | 80.2 |
-| 4 096 | 119.0 | 126.1 | **31.0** | 747.1 | **20.2** | 96.5 |
-| 65 536 | 445.4 | 254.7 | **40.3** | 11 949 ⚠️ | **23.6** | 153.6 |
-| 1 048 576 | 1 296.8 | 613.8 | **44.9** | ❌ O(N²) | **41.7** | 545.8 |
-
-### Insertion winners
-1. 🥇 **`boost::unordered_flat_map`** — fastest across the board
-2. 🥈 **`absl::flat_hash_map`** — very close at large N, scales better above 64K
-3. 🥉 `std::map` — decent at tiny N (cache-local tree), degrades sharply
+| 16 | 30.7 | 50.0 | 32.4 | 20.3 | **14.3** | 34.3 |
+| 256 | 45.0 | 68.1 | 23.1 | 65.4 | **22.6** | 71.5 |
+| 4 096 | 107.8 | 98.0 | **22.6** | 734.7 | **24.1** | 71.1 |
+| 65 536 | 288.4 | 159.9 | **28.2** | 13 718 ⚠️ | 32.3 | 89.3 |
+| 1 048 576 | 1 199.2 | 567.4 | **48.1** | ❌ O(N²) | **34.9** | 480.8 |
 
 ---
 
-## Lookup — ns per element
+## Insertion — with reserve
 
-> Lower is better. Container pre-filled before timing; only `find()` is measured.
+> `reserve(N)` called outside timing via `PauseTiming/ResumeTiming`. Only `insert()` measured.
 
-| N | std::map | std::unordered_map | **absl::flat_hash_map** | boost::flat_map | **boost::unordered_flat_map** | **boost::unordered_node_map** |
+| N | std::unordered_map | **absl::flat_hash_map** | boost::flat_map | **boost::unordered_flat_map** | boost::unordered_node_map |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 76.3 | 27.9 | 28.5 | 31.6 | 45.9 |
+| 256 | 71.7 | **9.5** | 73.7 | **6.8** | 50.9 |
+| 4 096 | 87.7 | **9.8** | 732.3 | **6.1** | 58.6 |
+| 65 536 | 102.6 | **12.8** | 15 633 ⚠️ | **8.4** | 86.3 |
+| 1 048 576 | 343.1 | 40.3 | ❌ O(N²) | **24.2** | 346.6 |
+
+---
+
+## Insertion — monotonic allocator (no reserve)
+
+> `std::pmr::monotonic_buffer_resource` arena (128 bytes/element) allocated once per benchmark.
+> Only `insert()` is timed.
+
+| N | std::pmr::map | std::pmr::unordered_map | **absl + pmr** | boost::unordered_flat + pmr | **boost::unordered_node + pmr** |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 33.7 | 55.5 | 48.3 | 29.0 | 35.6 |
+| 256 | 30.9 | 50.6 | 23.9 | 20.7 | 26.8 |
+| 4 096 | 85.5 | 53.2 | 23.1 | 20.7 | 24.9 |
+| 65 536 | 195.6 | 82.0 | 31.5 | 28.4 | 32.5 |
+| 1 048 576 | 799.0 | 326.4 | **36.8** | **33.1** | 100.8 |
+
+---
+
+## Insertion — monotonic allocator + reserve
+
+> Arena + `reserve(N)` both outside timing. Pure `insert()` cost only.
+
+| N | std::pmr::unordered_map | **absl + pmr** | **boost::unordered_flat + pmr** | boost::unordered_node + pmr |
+|---:|---:|---:|---:|---:|
+| 16 | 46.6 | 27.9 | **27.9** | 35.3 |
+| 256 | 35.4 | 10.4 | **7.4** | 13.0 |
+| 4 096 | 36.1 | 9.0 | **6.3** | 14.1 |
+| 65 536 | 49.1 | 12.5 | **8.0** | 17.8 |
+| 1 048 576 | 172.4 | 27.3 | **36.1** | 52.3 |
+
+---
+
+## Lookup
+
+> Container pre-filled before timing. Only `find()` is measured.
+
+| N | std::map | std::unordered_map | **absl::flat_hash_map** | boost::flat_map | **boost::unordered_flat_map** | boost::unordered_node_map |
 |---:|---:|---:|---:|---:|---:|---:|
 | 16 | 6.9 | 14.9 | 6.1 | 9.3 | 6.9 | **5.0** |
 | 256 | 12.4 | 16.1 | 6.7 | 25.2 | 6.7 | **5.4** |
@@ -59,39 +87,29 @@ All hash maps pre-allocated with `reserve(n)` before insertion.
 | 65 536 | 460.0 | 53.8 | 13.4 | 129.7 | **10.0** | 13.0 |
 | 1 048 576 | 1 170.4 | 93.7 | 41.9 | ❌ | **36.0** | 39.5 |
 
-### Lookup winners
-1. 🥇 **`boost::unordered_flat_map`** — best from N=4K to 1M
-2. 🥈 **`boost::unordered_node_map`** — fastest at small N (≤1K), competitive overall
-3. 🥉 **`absl::flat_hash_map`** — excellent, especially at mid-range N
-
 ---
 
 ## Key observations
 
-### `boost::unordered_flat_map` 🏆
-- Best **insertion** at every N tested
-- Best **lookup** for N ≥ 4K
-- Uses open-addressing with SIMD (SSE2/NEON) 15-element group probing — extremely cache-friendly
+### What monotonic allocator actually saves
 
-### `absl::flat_hash_map`
-- Strong **lookup** across all N; pulls ahead of `boost::unordered_flat_map` only at _very_ large N in insertion
-- Excellent predictable scaling — good general-purpose default
+For **flat containers** (`absl::flat_hash_map`, `boost::unordered_flat_map`):
+- `reserve(N)` → 1 allocation total → PMR saves exactly **1 `malloc()`** → negligible gain
+- Visible in table: PMR+reserve ≈ base with reserve for these two
 
-### `boost::unordered_node_map`
-- **Insertion** is slow (individual node allocations)
-- Surprisingly **fast lookup** at small N — SIMD metadata + stable pointers avoid rehash invalidation
+For **node-based containers** (`std::map`, `std::pmr::map`, `boost::unordered_node_map`):
+- Every insert → 1 `malloc()` for a tree/hash node → N inserts = N allocations
+- PMR replaces N `malloc()` calls with N bump-pointer advances
+- `std::pmr::map` vs `std::map` at N=4096: **85.5 vs ~119 ns/elem** — ~30% faster
+- `boost::unordered_node_map` + PMR + reserve at N=256: **13.0 ns** vs raw **80.2 ns** — ~6× faster
 
-### `std::map` (red-black tree)
-- Competitive only at N < 32 (data fits in L1 cache, branch prediction helps)
-- **O(log N)** lookup with pointer chasing → degrades badly beyond L2 cache
+### Container rankings
 
-### `std::unordered_map`
-- Worst **insertion** (chaining forces individual heap allocations)
-- Lookup degrades slowly but never reaches hash-map efficiency — high constant factor from indirection
-
-### `boost::container::flat_map`
-- Fastest **lookup at tiny N** (simple binary search on sorted array → L1 cache ideal)
-- **Insertion is O(N²)** — completely unusable above ~1K unless elements are inserted pre-sorted
+| | Insertion | Lookup |
+|---|---|---|
+| 🥇 | `boost::unordered_flat_map` | `boost::unordered_flat_map` (N≥4K) |
+| 🥈 | `absl::flat_hash_map` | `boost::unordered_node_map` (small N) |
+| 🥉 | `std::pmr::map` (with arena) | `absl::flat_hash_map` |
 
 ---
 
@@ -99,16 +117,17 @@ All hash maps pre-allocated with `reserve(n)` before insertion.
 
 | Use case | Recommended |
 |---|---|
-| General key-value store (any N) | `boost::unordered_flat_map` or `absl::flat_hash_map` |
-| Maximum lookup speed (N < 1K) | `boost::container::flat_map` (fill once, then query) |
-| Need stable references after insert | `boost::unordered_node_map` |
-| No external deps, decent performance | `std::unordered_map` |
-| Ordered iteration required | `std::map` or `boost::container::flat_map` |
+| General key-value store | `boost::unordered_flat_map` or `absl::flat_hash_map` |
+| Max lookup, query-heavy (N<1K sorted data) | `boost::container::flat_map` |
+| Stable references after insert | `boost::unordered_node_map` |
+| Node container + many inserts in tight loop | Any PMR node container + monotonic arena |
+| No external deps | `std::unordered_map` |
+| Ordered iteration | `std::map` or `boost::container::flat_map` |
 
 ---
 
 ## Chart
 
-![Benchmark chart](results.png)
+![Benchmark results](results.png)
 
-*Both axes are log-scale. X = number of elements, Y = time per element in nanoseconds.*
+*Log-log scale. X = number of elements, Y = time per element (ns).*
