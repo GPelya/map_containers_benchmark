@@ -1,0 +1,12 @@
+# Build artifacts
+build/
+
+# Generated benchmark output
+results.json
+results.png
+whole_results.png
+
+# Python virtualenv
+.venv/
+__pycache__/
+*.pyc
