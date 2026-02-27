@@ -105,8 +105,20 @@ for d in (insertion, ins_reserve, ins_pmr, ins_pmr_res, lookup):
 
 # ── plot ─────────────────────────────────────────────────────────────────────
 
-fig, axes = plt.subplots(1, 5, figsize=(36, 7))
+from matplotlib.gridspec import GridSpec
+
+fig = plt.figure(figsize=(22, 15), constrained_layout=True)
 fig.patch.set_facecolor("#1a1a2e")
+fig.set_constrained_layout_pads(hspace=0.04, wspace=0.03, h_pad=0.2, w_pad=0.2)
+gs  = GridSpec(3, 2, figure=fig)
+
+axes = [
+    fig.add_subplot(gs[0, 0]),   # Insertion (no reserve)
+    fig.add_subplot(gs[0, 1]),   # Insertion (with reserve)
+    fig.add_subplot(gs[1, 0]),   # Insertion + Monotonic
+    fig.add_subplot(gs[1, 1]),   # Insertion + Monotonic + reserve
+    fig.add_subplot(gs[2, :]),   # Lookup — full-width bottom row
+]
 
 datasets = [insertion,   ins_reserve,              ins_pmr,                     ins_pmr_res,                         lookup]
 titles   = ["Insertion\n(no reserve)",
@@ -156,9 +168,10 @@ def style_ax(ax, dataset, title):
 for ax, dataset, title in zip(axes, datasets, titles):
     style_ax(ax, dataset, title)
 
+
+
 plt.suptitle("Containers Benchmark",
-             color="white", fontsize=16, fontweight="bold", y=1.01)
-plt.tight_layout()
+             color="white", fontsize=16, fontweight="bold")
 plt.savefig(OUTPUT_FILE, dpi=150, bbox_inches="tight",
             facecolor=fig.get_facecolor())
 print(f"Saved → {OUTPUT_FILE}")
