@@ -15,6 +15,9 @@
 // Abseil
 #include <absl/container/flat_hash_map.h>
 
+// PMR (monotonic allocator)
+#include <memory_resource>
+
 //static constexpr int MAX_ELEMS              = 1 << 26; // 67 108 864 (~67M, closest power of 2 to 100M)
 static constexpr int MAX_ELEMS              = 1 << 20;
 // boost::container::flat_map insertion is O(N^2), limit to avoid hour-long runs
@@ -60,12 +63,12 @@ struct WithReserve {};  // call MapTraits<T>::reserve() before filling
 struct NoReserve   {};  // skip reserve — measure raw insertion cost
 
 // ============================================================
-//  MapTraits: per-container behaviour (reserve, etc.)
+//  MapTraits primary template (specializations follow after using aliases)
 // ============================================================
 template <typename MapType>
 struct MapTraits {
-    // Primary template: reserve is a no-op (e.g. std::map)
     static void reserve(MapType&, size_t) {}
+    static MapType construct(std::pmr::memory_resource*) { return MapType{}; }
 };
 
 template <typename MapType, typename ReservePolicy = NoReserve>
@@ -73,8 +76,11 @@ static void BM_MapInsertion(benchmark::State& state) {
     const int n = static_cast<int>(state.range(0));
     for (auto _ : state) {
         MapType s;
-        if constexpr (std::is_same_v<ReservePolicy, WithReserve>)
+        if constexpr (std::is_same_v<ReservePolicy, WithReserve>) {
+            state.PauseTiming();
             MapTraits<MapType>::reserve(s, n);
+            state.ResumeTiming();
+        }
         for (int i = 0; i < n; ++i)
             s.insert({g_data[i], Data{}});
     }
@@ -103,14 +109,56 @@ using BoostFlatMap        = boost::container::flat_map<uint32_t, Data>;
 using BoostUnorderedFlat  = boost::unordered::unordered_flat_map<uint32_t, Data>;
 using BoostUnorderedNode  = boost::unordered::unordered_node_map<uint32_t, Data>;
 
+// PMR aliases — backed by std::pmr::monotonic_buffer_resource
+// Note: boost::container::pmr uses its own memory_resource hierarchy
+// (incompatible with std::pmr), so we use std::pmr types directly.
+using PmrStdMap          = std::pmr::map<uint32_t, Data>;
+using PmrStdUnorderedMap = std::pmr::unordered_map<uint32_t, Data>;
+// boost::unordered 1.83: pass std::pmr::polymorphic_allocator explicitly
+using PmrBoostUnorderedFlat = boost::unordered::unordered_flat_map<
+    uint32_t, Data,
+    boost::hash<uint32_t>, std::equal_to<uint32_t>,
+    std::pmr::polymorphic_allocator<std::pair<const uint32_t, Data>>>;
+using PmrBoostUnorderedNode = boost::unordered::unordered_node_map<
+    uint32_t, Data,
+    boost::hash<uint32_t>, std::equal_to<uint32_t>,
+    std::pmr::polymorphic_allocator<std::pair<const uint32_t, Data>>>;
+
 // ============================================================
-//  MapTraits specializations — containers that support reserve()
+//  MapTraits: per-container reserve() + PMR construction
 // ============================================================
+// Primary: no reserve, construct ignores pool (non-PMR containers)
+
+// Non-PMR containers with reserve()
 template <> struct MapTraits<StdUnorderedMap>    { static void reserve(StdUnorderedMap& m,    size_t n) { m.reserve(n); } };
-template <> struct MapTraits<AbslFlatHashMap>    { static void reserve(AbslFlatHashMap& m,    size_t n) { m.reserve(n); } };
-template <> struct MapTraits<BoostFlatMap>       { static void reserve(BoostFlatMap& m,       size_t n) { m.reserve(n); } };
-template <> struct MapTraits<BoostUnorderedFlat> { static void reserve(BoostUnorderedFlat& m, size_t n) { m.reserve(n); } };
-template <> struct MapTraits<BoostUnorderedNode> { static void reserve(BoostUnorderedNode& m, size_t n) { m.reserve(n); } };
+template <> struct MapTraits<AbslFlatHashMap>       { static void reserve(AbslFlatHashMap& m,       size_t n) { m.reserve(n); } };
+template <> struct MapTraits<BoostFlatMap>          { static void reserve(BoostFlatMap& m,          size_t n) { m.reserve(n); } };
+template <> struct MapTraits<BoostUnorderedFlat>    { static void reserve(BoostUnorderedFlat& m,    size_t n) { m.reserve(n); } };
+template <> struct MapTraits<BoostUnorderedNode>    { static void reserve(BoostUnorderedNode& m,    size_t n) { m.reserve(n); } };
+
+// PMR specializations — provide construct() + reserve()
+template <> struct MapTraits<PmrStdMap> {
+    static void reserve(PmrStdMap&, size_t) {}
+    static PmrStdMap construct(std::pmr::memory_resource* p) { return PmrStdMap{p}; }
+};
+template <> struct MapTraits<PmrStdUnorderedMap> {
+    static void reserve(PmrStdUnorderedMap& m, size_t n) { m.reserve(n); }
+    static PmrStdUnorderedMap construct(std::pmr::memory_resource* p) { return PmrStdUnorderedMap{p}; }
+};
+template <> struct MapTraits<PmrBoostUnorderedFlat> {
+    using Alloc = std::pmr::polymorphic_allocator<std::pair<const uint32_t, Data>>;
+    static void reserve(PmrBoostUnorderedFlat& m, size_t n) { m.reserve(n); }
+    static PmrBoostUnorderedFlat construct(std::pmr::memory_resource* p) {
+        return PmrBoostUnorderedFlat{Alloc{p}};
+    }
+};
+template <> struct MapTraits<PmrBoostUnorderedNode> {
+    using Alloc = std::pmr::polymorphic_allocator<std::pair<const uint32_t, Data>>;
+    static void reserve(PmrBoostUnorderedNode& m, size_t n) { m.reserve(n); }
+    static PmrBoostUnorderedNode construct(std::pmr::memory_resource* p) {
+        return PmrBoostUnorderedNode{Alloc{p}};
+    }
+};
 
 // ============================================================
 //  INSERTION benchmarks
@@ -144,6 +192,41 @@ BENCHMARK_TEMPLATE(BM_MapLookup, AbslFlatHashMap)    ->RangeMultiplier(2)->Range
 BENCHMARK_TEMPLATE(BM_MapLookup, BoostFlatMap)       ->RangeMultiplier(2)->Range(2, FLAT_MAP_INSERTION_MAX);
 BENCHMARK_TEMPLATE(BM_MapLookup, BoostUnorderedFlat) ->RangeMultiplier(2)->Range(2, MAX_ELEMS);
 BENCHMARK_TEMPLATE(BM_MapLookup, BoostUnorderedNode) ->RangeMultiplier(2)->Range(2, MAX_ELEMS);
+
+// ============================================================
+//  INSERTION WITH MONOTONIC ALLOCATOR benchmarks
+//  Buffer is allocated outside timing loop; only insert() is measured.
+// ============================================================
+template <typename PmrMapType, typename ReservePolicy = NoReserve>
+static void BM_MapInsertionPMR(benchmark::State& state) {
+    const int    n         = static_cast<int>(state.range(0));
+    const size_t buf_bytes = static_cast<size_t>(n) * 128;
+
+    for (auto _ : state) {
+        state.PauseTiming();
+        std::vector<std::byte> buf(buf_bytes);
+        std::pmr::monotonic_buffer_resource pool(buf.data(), buf_bytes);
+        auto s = MapTraits<PmrMapType>::construct(&pool);
+        if constexpr (std::is_same_v<ReservePolicy, WithReserve>)
+            MapTraits<PmrMapType>::reserve(s, n);
+        state.ResumeTiming();
+
+        for (int i = 0; i < n; ++i)
+            s.insert({g_data[i], Data{}});
+    }
+    state.SetItemsProcessed(state.iterations() * n);
+}
+
+// INSERTION WITH MONOTONIC ALLOCATOR
+BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrStdMap)             ->RangeMultiplier(2)->Range(2, MAX_ELEMS);
+BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrStdUnorderedMap)    ->RangeMultiplier(2)->Range(2, MAX_ELEMS);
+BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrBoostUnorderedFlat) ->RangeMultiplier(2)->Range(2, MAX_ELEMS);
+BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrBoostUnorderedNode) ->RangeMultiplier(2)->Range(2, MAX_ELEMS);
+
+// INSERTION WITH MONOTONIC ALLOCATOR + RESERVE
+BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrStdUnorderedMap,    WithReserve)->RangeMultiplier(2)->Range(2, MAX_ELEMS);
+BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrBoostUnorderedFlat, WithReserve)->RangeMultiplier(2)->Range(2, MAX_ELEMS);
+BENCHMARK_TEMPLATE(BM_MapInsertionPMR, PmrBoostUnorderedNode, WithReserve)->RangeMultiplier(2)->Range(2, MAX_ELEMS);
 
 // ============================================================
 //  boost::intrusive::set  (separate functions — different API)
