@@ -202,9 +202,13 @@ static void BM_MapInsertionPMR(benchmark::State& state) {
     const int    n         = static_cast<int>(state.range(0));
     const size_t buf_bytes = static_cast<size_t>(n) * 128;
 
+    // Allocate once — reused across iterations.
+    // monotonic_buffer_resource just bumps a pointer, so re-creating it
+    // from the same buffer each iteration is cheap (no memset needed).
+    std::vector<std::byte> buf(buf_bytes);
+
     for (auto _ : state) {
         state.PauseTiming();
-        std::vector<std::byte> buf(buf_bytes);
         std::pmr::monotonic_buffer_resource pool(buf.data(), buf_bytes);
         auto s = MapTraits<PmrMapType>::construct(&pool);
         if constexpr (std::is_same_v<ReservePolicy, WithReserve>)
